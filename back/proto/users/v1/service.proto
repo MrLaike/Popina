@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package users.v1;
+
+option php_namespace = "GRPC\\Services\\Users\\v1";
+option php_metadata_namespace = "GRPC\\ProtobufMetadata\\Users\\v1";
+
+import "users/v1/request.proto";
+import "users/v1/response.proto";
+
+service UsersService {
+  rpc Get (users.v1.request.GetRequest) returns (users.v1.response.GetResponse) {
+  }
+
+}

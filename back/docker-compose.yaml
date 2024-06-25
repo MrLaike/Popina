@@ -1,0 +1,274 @@
+version: '3.5'
+
+services:
+  reverse-proxy:
+    container_name: popina-reverse-proxy
+    image: traefik:v2.9
+    command:
+      - "--accesslog"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.directory=/configuration/"
+      - "--providers.file.watch=true"
+    ports:
+      - ${TRAEFIC_PORT_HTTP:-80}:80
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.buggregator-reverse-proxy.entrypoints=web"
+      - "traefik.http.routers.buggregator-reverse-proxy.rule=Host(`traefik.popina.localhost`)"
+      - "traefik.http.services.buggregator-reverse-proxy.loadbalancer.server.port=8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - popina-network
+    logging:
+      driver: none
+
+  web:
+    container_name: popina-web
+    build:
+      context: .
+      args:
+        SERVICE_NAME: web
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_DATABASE: homestead
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-web}
+    volumes:
+      - ./web:/app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.popina-web.entrypoints=web"
+      - "traefik.http.routers.popina-web.rule=Host(`popina.localhost`)"
+      - "traefik.http.services.popina-web.loadbalancer.server.port=8080"
+    networks:
+      - popina-network
+
+  users:
+    container_name: popina-users
+    build:
+      context: .
+      args:
+        SERVICE_NAME: users
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_DATABASE: users
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-users}
+    volumes:
+      - ./users:/app
+    networks:
+      - popina-network
+
+  orders:
+    container_name: popina-orders
+    build:
+      context: .
+      args:
+        SERVICE_NAME: orders
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_DATABASE: orders
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-orders}
+    volumes:
+      - ./users:/app
+    networks:
+      - popina-network
+
+  catalog:
+    container_name: popina-catalog
+    build:
+      context: .
+      args:
+        SERVICE_NAME: catalog
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_DATABASE: catalog
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-catalog}
+    volumes:
+      - ./users:/app
+    networks:
+      - popina-network
+
+  kitchen:
+    container_name: popina-kitchen
+    build:
+      context: .
+      args:
+        SERVICE_NAME: kitchen
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_DATABASE: catalog
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-kitchen}
+    volumes:
+      - ./users:/app
+    networks:
+      - popina-network
+
+  reports:
+    container_name: popina-reports
+    build:
+      context: .
+      args:
+        SERVICE_NAME: reports
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_CONNECTION: pgsql
+      DB_DATABASE: catalog
+      RR_LOG_LEVEL: ${RR_LOG_LEVEL:-debug}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-php-reports}
+    volumes:
+      - ./users:/app
+    networks:
+      - popina-network
+
+
+  db:
+    container_name: popina-db
+    image: postgres
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: popina
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - type: bind
+        source: ./.docker-data/db
+        target: /var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -d $$POSTGRES_USER -U $$POSTGRES_USER
+      interval: 2s
+      timeout: 5s
+      start_period: 2s
+    ports:
+      - "54321:5432"
+    restart: on-failure
+    networks:
+      - popina-network
+    logging:
+      driver: none
+
+  buggregator:
+    container_name: popina-buggregator
+    image: ghcr.io/buggregator/server:latest
+    restart: on-failure
+    ports:
+      - "9912:9912"
+      - "9913:9913"
+      - "1025:1025"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.popina-buggregator.entrypoints=web"
+      - "traefik.http.routers.popina-buggregator.rule=Host(`buggregator.popina.localhost`)"
+      - "traefik.http.services.popina-buggregator.loadbalancer.server.port=8000"
+    networks:
+      - popina-network
+    logging:
+      driver: none
+
+  collector:
+    container_name: popina-collector
+    image: otel/opentelemetry-collector-contrib
+    command: [ "--config=/etc/otel-collector-config.yml" ]
+    volumes:
+      - ./.docker/otel/otel-collector-config.yml:/etc/otel-collector-config.yml
+    networks:
+      - popina-network
+
+  zipkin:
+    container_name: popina-zipkin
+    image: openzipkin/zipkin-slim
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.popina-zipkin.entrypoints=web"
+      - "traefik.http.routers.popina-zipkin.rule=Host(`zipkin.popina.localhost`)"
+      - "traefik.http.services.popina-zipkin.loadbalancer.server.port=9411"
+    networks:
+      - popina-network
+    logging:
+      driver: none
+
+  adminer:
+    container_name: popina-adminer
+    image: adminer
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: ${ADMINER_DEFAULT_SERVER:-db}
+    networks:
+      - popina-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.entrypoints=web"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.popina.localhost`)"
+    logging:
+      driver: none
+
+  temporal:
+    container_name: popina-temporal
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: homestead
+      POSTGRES_PWD: secret
+      POSTGRES_SEEDS: db
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    image: temporalio/auto-setup:1.22.5
+    volumes:
+      - ./.docker/temporalio:/etc/temporal/config/dynamicconfig
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - popina-network
+    logging:
+      driver: none
+
+  temporal-ui:
+    container_name: popina-temporal-ui
+    depends_on:
+      temporal:
+        condition: service_started
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    image: temporalio/ui
+    restart: unless-stopped
+    networks:
+      - popina-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.temporal.entrypoints=web"
+      - "traefik.http.routers.temporal.rule=Host(`temporal.popina.localhost`)"
+      - "traefik.http.services.temporal.loadbalancer.server.port=8080"
+    logging:
+      driver: none
+
+networks:
+  popina-network:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.0.13.0/24

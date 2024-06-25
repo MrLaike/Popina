@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package users.v1.request;
+
+option php_namespace = "GRPC\\Services\\Users\\v1";
+option php_metadata_namespace = "GRPC\\ProtobufMetadata\\Users\\v1";
+
+message GetRequest {
+  string uuid = 1;
+}
